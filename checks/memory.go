@@ -1,0 +1,126 @@
+package checks
+
+import (
+	"bufio"
+	"fmt"
+	"os"
+	"os/exec"
+	"runtime"
+	"strconv"
+	"strings"
+)
+
+const memWarnThresholdMB = 512
+
+// AvailableMemoryMB returns the available system memory in megabytes.
+// On Linux it parses /proc/meminfo; on macOS it uses vm_stat.
+func AvailableMemoryMB() (int64, error) {
+	switch runtime.GOOS {
+	case "linux":
+		return availableMemoryLinux()
+	case "darwin":
+		return availableMemoryDarwin()
+	default:
+		return 0, fmt.Errorf("unsupported OS: %s", runtime.GOOS)
+	}
+}
+
+// MemoryWarning returns a warning string if availMB < 512, otherwise "".
+func MemoryWarning(availMB int64) string {
+	if availMB < memWarnThresholdMB {
+		return fmt.Sprintf("Warning: only %d MB available (recommended: ≥ 512 MB)", availMB)
+	}
+	return ""
+}
+
+// readProcMeminfo is a variable so tests can replace it.
+var readProcMeminfo = func() (string, error) {
+	data, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+// availableMemoryLinux parses /proc/meminfo.
+func availableMemoryLinux() (int64, error) {
+	data, err := readProcMeminfo()
+	if err != nil {
+		return 0, err
+	}
+	return parseMemInfoString(data)
+}
+
+// parseMemInfoString parses a /proc/meminfo string and returns MemAvailable in MB.
+func parseMemInfoString(data string) (int64, error) {
+	scanner := bufio.NewScanner(strings.NewReader(data))
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "MemAvailable:") {
+			fields := strings.Fields(line)
+			if len(fields) < 2 {
+				return 0, fmt.Errorf("unexpected MemAvailable format: %q", line)
+			}
+			kb, err := strconv.ParseInt(fields[1], 10, 64)
+			if err != nil {
+				return 0, fmt.Errorf("parsing MemAvailable: %w", err)
+			}
+			return kb / 1024, nil
+		}
+	}
+	return 0, fmt.Errorf("MemAvailable not found in /proc/meminfo")
+}
+
+// availableMemoryDarwin approximates available memory on macOS using vm_stat.
+func availableMemoryDarwin() (int64, error) {
+	out, err := exec.Command("vm_stat").Output()
+	if err != nil {
+		return 0, fmt.Errorf("vm_stat: %w", err)
+	}
+	return parseVMStat(string(out))
+}
+
+// parseVMStat parses vm_stat output and returns approximate free MB.
+func parseVMStat(data string) (int64, error) {
+	pageSize := int64(4096) // Default macOS page size.
+
+	var freePages, inactivePages, speculativePages int64
+
+	scanner := bufio.NewScanner(strings.NewReader(data))
+	for scanner.Scan() {
+		line := scanner.Text()
+		switch {
+		case strings.HasPrefix(line, "Pages free:"):
+			freePages = parseVMStatLine(line)
+		case strings.HasPrefix(line, "Pages inactive:"):
+			inactivePages = parseVMStatLine(line)
+		case strings.HasPrefix(line, "Pages speculative:"):
+			speculativePages = parseVMStatLine(line)
+		case strings.Contains(line, "page size of"):
+			// "Mach Virtual Memory Statistics: (page size of 16384 bytes)"
+			fields := strings.Fields(line)
+			for i, f := range fields {
+				if f == "of" && i+1 < len(fields) {
+					if ps, err := strconv.ParseInt(fields[i+1], 10, 64); err == nil {
+						pageSize = ps
+					}
+				}
+			}
+		}
+	}
+
+	totalFreeBytes := (freePages + inactivePages + speculativePages) * pageSize
+	return totalFreeBytes / (1024 * 1024), nil
+}
+
+func parseVMStatLine(line string) int64 {
+	// Format: "Pages free:                         12345."
+	parts := strings.Split(line, ":")
+	if len(parts) < 2 {
+		return 0
+	}
+	s := strings.TrimSpace(parts[1])
+	s = strings.TrimSuffix(s, ".")
+	v, _ := strconv.ParseInt(s, 10, 64)
+	return v
+}

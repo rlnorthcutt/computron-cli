@@ -1,0 +1,98 @@
+package cmd
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/rlnorthcutt/computron-cli/config"
+	"github.com/rlnorthcutt/computron-cli/styles"
+	"github.com/rlnorthcutt/computron-cli/tui"
+	"github.com/spf13/cobra"
+)
+
+
+var installCmd = &cobra.Command{
+	Use:   "install",
+	Short: "Install Computron via interactive TUI wizard",
+	Long:  `Runs a full interactive TUI wizard to install and configure the Computron container.`,
+	RunE:  runInstall,
+}
+
+func init() {
+	rootCmd.AddCommand(installCmd)
+}
+
+func runInstall(_ *cobra.Command, _ []string) error {
+	if LoadedConfig != nil {
+		fmt.Printf("\nExisting installation %s detected.\n\n",
+			styles.Active.Render(LoadedConfig.ContainerName))
+
+		if !promptYN("Install a new instance instead? [y/N]: ") {
+			// Update the existing install.
+			eng, err := engineFromConfig(LoadedConfig.Engine)
+			if err != nil {
+				return err
+			}
+			model := tui.NewUpdateModel(LoadedConfig, eng)
+			p := tea.NewProgram(model, tea.WithAltScreen())
+			_, err = p.Run()
+			return err
+		}
+
+		fmt.Println()
+		// Fall through to fresh wizard, pre-seeded with non-conflicting defaults.
+		suggested := suggestNewInstanceDefaults()
+		model := tui.NewInstallModel(ConfigPath, suggested)
+		p := tea.NewProgram(model, tea.WithAltScreen())
+		_, err := p.Run()
+		return err
+	}
+
+	model := tui.NewInstallModel(ConfigPath, nil)
+	p := tea.NewProgram(model, tea.WithAltScreen())
+	_, err := p.Run()
+	return err
+}
+
+// suggestNewInstanceDefaults inspects existing instances and returns a Config
+// pre-filled with a unique container name, data directories, and web UI port.
+func suggestNewInstanceDefaults() *config.Config {
+	instances, _ := config.ListInstances()
+
+	// Collect names and ports already in use.
+	takenNames := map[string]bool{}
+	maxPort := 8080
+	for _, inst := range instances {
+		if inst.Config == nil {
+			continue
+		}
+		takenNames[inst.Config.ContainerName] = true
+		if p, err := strconv.Atoi(inst.Config.WebUIPortOrDefault()); err == nil && p >= maxPort {
+			maxPort = p
+		}
+	}
+
+	// Pick the first unused name: computron2, computron3, …
+	name := "computron2"
+	for i := 2; takenNames[name]; i++ {
+		name = fmt.Sprintf("computron%d", i)
+	}
+
+	// Derive directory names from the numeric suffix (computron2 → Computron2).
+	suffix := name[len("computron"):]
+	dirBase := "Computron" + suffix
+
+	home, _ := os.UserHomeDir()
+	sharedDir := filepath.Join(home, dirBase)
+	stateDir := filepath.Join(home, dirBase, "state")
+
+	d := config.DefaultConfig()
+	d.ContainerName = name
+	d.SharedDir = sharedDir
+	d.StateDir = stateDir
+	d.WebUIPort = strconv.Itoa(maxPort + 1)
+	return d
+}
