@@ -15,6 +15,7 @@ type Config struct {
 	ContainerName string    `yaml:"container_name"`
 	SharedDir     string    `yaml:"shared_dir"`
 	StateDir      string    `yaml:"state_dir"`
+	Memory        string    `yaml:"memory"`      // container --memory limit (e.g. "2g")
 	ShmSize       string    `yaml:"shm_size"`
 	WebUIPort     string    `yaml:"web_ui_port"` // host port for the web UI (default "8080")
 	Engine        string    `yaml:"engine"`      // "docker" or "podman"
@@ -81,8 +82,9 @@ func DefaultConfig() *Config {
 	return &Config{
 		ContainerName: "computron",
 		SharedDir:     expandHome("~/Computron"),
-		StateDir:      expandHome("~/Computron/state"),
-		ShmSize:       "256m",
+		StateDir:      expandHome("~/Computron/.state"),
+		Memory:        "2g",
+		ShmSize:       "1024m",
 		WebUIPort:     "8080",
 		Image:         "ghcr.io/lefoulkrod/computron_9000:container-distro-latest",
 	}

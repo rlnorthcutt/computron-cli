@@ -70,6 +70,9 @@ type InstallModel struct {
 	lastCompletedStep int             // -1 = none; used for rollback on failure
 	existingNames     map[string]bool // container names already in use (cached at init)
 
+	// Image override (from --image flag, not shown in TUI).
+	imageOverride string
+
 	// Done.
 	configPath string
 	savedCfg   *config.Config
@@ -83,7 +86,7 @@ type InstallModel struct {
 const (
 	inputContainerName = iota
 	inputSharedDir
-	inputStateDir
+	inputMemory
 	inputShmSize
 	inputWebUIPort
 	inputCount
@@ -91,11 +94,25 @@ const (
 
 // NewInstallModel creates and initialises the install wizard model.
 // If initial is non-nil its values are used instead of DefaultConfig().
-func NewInstallModel(configPath string, initial *config.Config) InstallModel {
+// imageOverride, if non-empty, replaces the default container image (not shown in TUI).
+func NewInstallModel(configPath string, initial *config.Config, imageOverride string) InstallModel {
 	inputs := make([]textinput.Model, inputCount)
 	defaults := initial
 	if defaults == nil {
 		defaults = config.DefaultConfig()
+	}
+
+	// Calculate memory defaults from total system RAM.
+	defaultMem := defaults.Memory
+	defaultShm := defaults.ShmSize
+	if totalMB, err := checks.TotalMemoryMB(); err == nil && totalMB > 0 {
+		defaultMem, defaultShm = checks.DefaultContainerMemory(totalMB)
+	}
+	if defaultMem == "" {
+		defaultMem = "2g"
+	}
+	if defaultShm == "" {
+		defaultShm = "1024m"
 	}
 
 	for i := range inputs {
@@ -107,11 +124,11 @@ func NewInstallModel(configPath string, initial *config.Config) InstallModel {
 	inputs[inputSharedDir].Placeholder = "~/Computron"
 	inputs[inputSharedDir].SetValue(defaults.SharedDir)
 
-	inputs[inputStateDir].Placeholder = "~/Computron/state"
-	inputs[inputStateDir].SetValue(defaults.StateDir)
+	inputs[inputMemory].Placeholder = "2g"
+	inputs[inputMemory].SetValue(defaultMem)
 
-	inputs[inputShmSize].Placeholder = "256m"
-	inputs[inputShmSize].SetValue(defaults.ShmSize)
+	inputs[inputShmSize].Placeholder = "1024m"
+	inputs[inputShmSize].SetValue(defaultShm)
 
 	inputs[inputWebUIPort].Placeholder = "8080"
 	inputs[inputWebUIPort].SetValue(defaults.WebUIPortOrDefault())
@@ -139,6 +156,7 @@ func NewInstallModel(configPath string, initial *config.Config) InstallModel {
 		configPath:        configPath,
 		lastCompletedStep: -1,
 		existingNames:     existingNames,
+		imageOverride:     imageOverride,
 	}
 }
 
@@ -289,15 +307,15 @@ func (m *InstallModel) validateCurrentInput() bool {
 			m.inputErrs[m.inputFocus] = "an instance named '" + val + "' already exists"
 			return false
 		}
-	case inputSharedDir, inputStateDir:
+	case inputSharedDir:
 		expanded := expandTilde(val)
 		if !filepath.IsAbs(expanded) {
 			m.inputErrs[m.inputFocus] = "must be an absolute path (e.g. /home/user/Computron)"
 			return false
 		}
-	case inputShmSize:
-		if !validShmSize(val) {
-			m.inputErrs[m.inputFocus] = "must be a number + unit (e.g. 256m, 1g)"
+	case inputMemory, inputShmSize:
+		if !validMemSize(val) {
+			m.inputErrs[m.inputFocus] = "must be a number + unit (e.g. 512m, 2g)"
 			return false
 		}
 	case inputWebUIPort:
@@ -322,13 +340,13 @@ func expandTilde(path string) string {
 	return filepath.Join(home, path[1:])
 }
 
-var shmSizeRegex = regexp.MustCompile(`^\d+[mMgGkK]$`)
+var memSizeRegex = regexp.MustCompile(`^\d+[mMgGkK]$`)
 
 // containerNameRegex matches valid Docker/Podman container names.
 var containerNameRegex = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
 
-func validShmSize(s string) bool {
-	return shmSizeRegex.MatchString(s)
+func validMemSize(s string) bool {
+	return memSizeRegex.MatchString(s)
 }
 
 func validContainerName(s string) bool {
@@ -471,16 +489,15 @@ func (m *InstallModel) startInstallStep(i int) tea.Cmd {
 	case 4: // Run container.
 		workCmd = StepCmd(i, func() (string, error) {
 			opts := engine.RunOptions{
-				Name:       cfg.ContainerName,
-				Image:      cfg.Image,
-				ShmSize:    cfg.ShmSize,
-				SharedDir:  cfg.SharedDir,
-				StateDir:   cfg.StateDir,
-				Network:    "host",
-				Restart:    "always",
-				OllamaHost: checks.OllamaHost(),
-				WebUIPort:  cfg.WebUIPortOrDefault(),
-				Platform:   runtime.GOOS,
+				Name:      cfg.ContainerName,
+				Image:     cfg.Image,
+				Memory:    cfg.Memory,
+				ShmSize:   cfg.ShmSize,
+				SharedDir: cfg.SharedDir,
+				StateDir:  cfg.StateDir,
+				Restart:   "always",
+				WebUIPort: cfg.WebUIPortOrDefault(),
+				Platform:  runtime.GOOS,
 			}
 			return "", eng.RunContainer(opts)
 		})
@@ -499,13 +516,20 @@ func (m *InstallModel) startInstallStep(i int) tea.Cmd {
 }
 
 func (m *InstallModel) buildConfig() *config.Config {
+	sharedDir := strings.TrimSpace(m.inputs[inputSharedDir].Value())
+	stateDir := expandTilde(sharedDir) + "/.state"
+	image := config.DefaultConfig().Image
+	if m.imageOverride != "" {
+		image = m.imageOverride
+	}
 	return &config.Config{
 		ContainerName: strings.TrimSpace(m.inputs[inputContainerName].Value()),
-		SharedDir:     strings.TrimSpace(m.inputs[inputSharedDir].Value()),
-		StateDir:      strings.TrimSpace(m.inputs[inputStateDir].Value()),
+		SharedDir:     sharedDir,
+		StateDir:      stateDir,
+		Memory:        strings.TrimSpace(m.inputs[inputMemory].Value()),
 		ShmSize:       strings.TrimSpace(m.inputs[inputShmSize].Value()),
 		WebUIPort:     strings.TrimSpace(m.inputs[inputWebUIPort].Value()),
-		Image:         config.DefaultConfig().Image,
+		Image:         image,
 	}
 }
 
@@ -598,12 +622,12 @@ func (m InstallModel) viewPreflight() string {
 func (m InstallModel) viewConfig() string {
 	out := styles.Header("COMPUTRON", "Configuration", m.WindowWidth)
 
-	fieldNames := []string{"Container name", "Shared directory", "State directory", "SHM size", "Web UI port"}
+	fieldNames := []string{"Container name", "Shared directory", "Memory limit", "SHM size", "Web UI port"}
 	fieldDescs := []string{
 		"name for the Docker/Podman container",
-		"host path mounted into the container",
-		"persistent state directory",
-		"shared memory size  (e.g. 256m, 1g)",
+		"host path mounted into the container as ~/Computron",
+		"container RAM limit  (e.g. 2g, 4g) — default based on your system RAM",
+		"shared memory size  (e.g. 512m, 1g) — default is 50% of memory limit",
 		"host port for the web UI  (e.g. 8080, 8081 for a second instance)",
 	}
 
@@ -633,15 +657,21 @@ func (m InstallModel) viewConfirm() string {
 		return "  " + styles.Dim.Render(padRight(k, 18)) + styles.Active.Render(v) + "\n"
 	}
 
+	image := config.DefaultConfig().Image
+	if m.imageOverride != "" {
+		image = m.imageOverride
+	}
+	sharedDir := m.inputs[inputSharedDir].Value()
 	summary := kv("Engine", m.eng.Name()) +
 		kv("OS / Arch", runtime.GOOS+" / "+runtime.GOARCH) +
 		"\n" +
 		kv("Container name", m.inputs[inputContainerName].Value()) +
-		kv("Shared dir", m.inputs[inputSharedDir].Value()) +
-		kv("State dir", m.inputs[inputStateDir].Value()) +
+		kv("Shared dir", sharedDir) +
+		kv("State dir", expandTilde(sharedDir)+"/.state") +
+		kv("Memory limit", m.inputs[inputMemory].Value()) +
 		kv("SHM size", m.inputs[inputShmSize].Value()) +
 		kv("Web UI port", m.inputs[inputWebUIPort].Value()) +
-		kv("Image", config.DefaultConfig().Image)
+		kv("Image", image)
 
 	out += styles.Border.Render(summary) + "\n"
 
@@ -671,7 +701,6 @@ func (m InstallModel) viewDone() string {
 	out += kv("Web UI", "http://localhost:"+m.inputs[inputWebUIPort].Value())
 	out += kv("Ollama", checks.OllamaHost())
 	out += kv("Shared dir", m.inputs[inputSharedDir].Value())
-	out += kv("State dir", m.inputs[inputStateDir].Value())
 	out += kv("Config", m.configPath)
 	out += "\n" + styles.Dim.Render("  Press any key to exit.")
 	return out

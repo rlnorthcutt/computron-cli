@@ -10,6 +10,7 @@ import (
 type RunOptions struct {
 	Name       string
 	Image      string
+	Memory     string // container memory limit (e.g. "2g")
 	ShmSize    string
 	SharedDir  string
 	StateDir   string

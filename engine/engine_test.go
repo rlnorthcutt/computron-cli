@@ -59,61 +59,164 @@ func TestDetectDockerFallback(t *testing.T) {
 	}
 }
 
-// TestBuildRunArgsLinux verifies correct docker run args on Linux (with :Z mounts).
+// TestBuildRunArgsLinux verifies correct docker run args on Linux (with :Z mounts, port mapping, host-gateway).
 func TestBuildRunArgsLinux(t *testing.T) {
 	opts := RunOptions{
 		Name:      "computron",
 		Image:     "ghcr.io/example/img:latest",
 		ShmSize:   "256m",
 		SharedDir: "/home/user/Computron",
-		StateDir:  "/home/user/Computron/state",
-		Network:   "host",
+		StateDir:  "/home/user/Computron/.state",
 		Restart:   "always",
+		WebUIPort: "8080",
 		Platform:  "linux",
 	}
 
 	args := buildRunArgs("docker", opts)
 
 	assertContains(t, args, "--shm-size=256m")
-	assertContains(t, args, "--network")
-	assertContains(t, args, "host")
+	assertContains(t, args, "8080:8080")
+	assertContains(t, args, "--add-host=host-gateway:host-gateway")
 	assertContains(t, args, "/home/user/Computron:/home/computron:Z")
-	assertContains(t, args, "/home/user/Computron/state:/var/lib/computron:Z")
-	assertNotContains(t, args, "OLLAMA_HOST")
+	assertContains(t, args, "/home/user/Computron/.state:/var/lib/computron:Z")
+	assertContainsPrefix(t, args, "OLLAMA_HOST=http://host-gateway:11434")
+	assertContains(t, args, "PORT=8080")
+	assertNotContains(t, args, "--network")
+	// --user should be present on Linux (value depends on test runner UID).
+	assertContains(t, args, "--user")
 }
 
-// TestBuildRunArgsMacOS verifies macOS-specific behaviour (no :Z, OLLAMA_HOST env).
-func TestBuildRunArgsMacOS(t *testing.T) {
+// TestBuildRunArgsLinuxSecondInstance verifies a second instance maps a different host port.
+func TestBuildRunArgsLinuxSecondInstance(t *testing.T) {
 	opts := RunOptions{
-		Name:       "computron",
-		Image:      "ghcr.io/example/img:latest",
-		ShmSize:    "256m",
-		SharedDir:  "/Users/user/Computron",
-		StateDir:   "/Users/user/Computron/state",
-		OllamaHost: "host.docker.internal:11434",
-		Platform:   "darwin",
+		Name:      "computron2",
+		Image:     "ghcr.io/example/img:latest",
+		ShmSize:   "256m",
+		SharedDir: "/home/user/Computron2",
+		StateDir:  "/home/user/Computron2/.state",
+		WebUIPort: "8081",
+		Platform:  "linux",
 	}
 
 	args := buildRunArgs("docker", opts)
 
+	assertContains(t, args, "8081:8080")
+	// Internal PORT is always 8080 regardless of host port.
+	assertContains(t, args, "PORT=8080")
+}
+
+// TestBuildRunArgsMacOS verifies macOS-specific behaviour (no :Z, no host-gateway, OLLAMA_HOST via docker.internal).
+func TestBuildRunArgsMacOS(t *testing.T) {
+	opts := RunOptions{
+		Name:      "computron",
+		Image:     "ghcr.io/example/img:latest",
+		ShmSize:   "256m",
+		SharedDir: "/Users/user/Computron",
+		StateDir:  "/Users/user/Computron/.state",
+		WebUIPort: "8080",
+		Platform:  "darwin",
+	}
+
+	args := buildRunArgs("docker", opts)
+
+	assertContains(t, args, "8080:8080")
 	assertNotContains(t, args, "/Users/user/Computron:/home/computron:Z")
 	assertContains(t, args, "/Users/user/Computron:/home/computron")
 	assertContainsPrefix(t, args, "OLLAMA_HOST=http://host.docker.internal:11434")
+	assertNotContains(t, args, "--add-host=host-gateway:host-gateway")
+	// --user must be absent on macOS — Docker Desktop handles ownership differently.
+	assertNotContains(t, args, "--user")
 }
 
-// TestBuildPodmanRunArgsHasReplace verifies --replace is present for Podman.
+// TestBuildPodmanRunArgsHasReplace verifies --replace is present and Linux uses host.containers.internal.
 func TestBuildPodmanRunArgsHasReplace(t *testing.T) {
 	opts := RunOptions{
 		Name:      "computron",
 		Image:     "ghcr.io/example/img:latest",
 		ShmSize:   "256m",
 		SharedDir: "/home/user/Computron",
-		StateDir:  "/home/user/Computron/state",
+		StateDir:  "/home/user/Computron/.state",
+		WebUIPort: "8080",
 		Platform:  "linux",
 	}
 
 	args := buildPodmanRunArgs(opts)
 	assertContains(t, args, "--replace")
+	assertContains(t, args, "8080:8080")
+	assertContainsPrefix(t, args, "OLLAMA_HOST=http://host.containers.internal:11434")
+	assertNotContains(t, args, "--network")
+	assertContains(t, args, "/home/user/Computron:/home/computron:Z,U")
+	assertContains(t, args, "/home/user/Computron/.state:/var/lib/computron:Z,U")
+}
+
+// TestBuildPodmanRunArgsMacOS verifies Podman macOS uses host.docker.internal and no :Z,U mounts.
+func TestBuildPodmanRunArgsMacOS(t *testing.T) {
+	opts := RunOptions{
+		Name:      "computron",
+		Image:     "ghcr.io/example/img:latest",
+		ShmSize:   "256m",
+		SharedDir: "/Users/user/Computron",
+		StateDir:  "/Users/user/Computron/.state",
+		WebUIPort: "8080",
+		Platform:  "darwin",
+	}
+
+	args := buildPodmanRunArgs(opts)
+	assertContains(t, args, "--replace")
+	assertContains(t, args, "8080:8080")
+	assertContainsPrefix(t, args, "OLLAMA_HOST=http://host.docker.internal:11434")
+	// No SELinux or user-namespace flags on macOS.
+	assertNotContains(t, args, "/Users/user/Computron:/home/computron:Z,U")
+	assertNotContains(t, args, "/Users/user/Computron:/home/computron:Z")
+	assertContains(t, args, "/Users/user/Computron:/home/computron")
+}
+
+// TestBuildRunArgsMemorySet verifies --memory is included when Memory is set.
+func TestBuildRunArgsMemorySet(t *testing.T) {
+	opts := RunOptions{
+		Name:      "computron",
+		Image:     "ghcr.io/example/img:latest",
+		Memory:    "4g",
+		ShmSize:   "2048m",
+		SharedDir: "/home/user/Computron",
+		StateDir:  "/home/user/Computron/.state",
+		Platform:  "linux",
+	}
+	args := buildRunArgs("docker", opts)
+	assertContains(t, args, "--memory=4g")
+}
+
+// TestBuildRunArgsMemoryEmpty verifies --memory is omitted when Memory is not set.
+func TestBuildRunArgsMemoryEmpty(t *testing.T) {
+	opts := RunOptions{
+		Name:      "computron",
+		Image:     "ghcr.io/example/img:latest",
+		ShmSize:   "256m",
+		SharedDir: "/home/user/Computron",
+		StateDir:  "/home/user/Computron/.state",
+		Platform:  "linux",
+	}
+	args := buildRunArgs("docker", opts)
+	for _, a := range args {
+		if len(a) >= 8 && a[:8] == "--memory" {
+			t.Errorf("expected no --memory flag, got %q", a)
+		}
+	}
+}
+
+// TestBuildPodmanRunArgsMemorySet verifies --memory is included for Podman too.
+func TestBuildPodmanRunArgsMemorySet(t *testing.T) {
+	opts := RunOptions{
+		Name:      "computron",
+		Image:     "ghcr.io/example/img:latest",
+		Memory:    "2g",
+		ShmSize:   "1024m",
+		SharedDir: "/home/user/Computron",
+		StateDir:  "/home/user/Computron/.state",
+		Platform:  "linux",
+	}
+	args := buildPodmanRunArgs(opts)
+	assertContains(t, args, "--memory=2g")
 }
 
 // TestOllamaHostLinux checks the Linux Ollama host value.

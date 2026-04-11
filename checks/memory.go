@@ -25,6 +25,70 @@ func AvailableMemoryMB() (int64, error) {
 	}
 }
 
+// TotalMemoryMB returns the total installed system memory in megabytes.
+// On Linux it parses /proc/meminfo; on macOS it uses sysctl hw.memsize.
+func TotalMemoryMB() (int64, error) {
+	switch runtime.GOOS {
+	case "linux":
+		return totalMemoryLinux()
+	case "darwin":
+		return totalMemoryDarwin()
+	default:
+		return 0, fmt.Errorf("unsupported OS: %s", runtime.GOOS)
+	}
+}
+
+func totalMemoryLinux() (int64, error) {
+	data, err := readProcMeminfo()
+	if err != nil {
+		return 0, err
+	}
+	scanner := bufio.NewScanner(strings.NewReader(data))
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "MemTotal:") {
+			fields := strings.Fields(line)
+			if len(fields) < 2 {
+				return 0, fmt.Errorf("unexpected MemTotal format: %q", line)
+			}
+			kb, err := strconv.ParseInt(fields[1], 10, 64)
+			if err != nil {
+				return 0, fmt.Errorf("parsing MemTotal: %w", err)
+			}
+			return kb / 1024, nil
+		}
+	}
+	return 0, fmt.Errorf("MemTotal not found in /proc/meminfo")
+}
+
+func totalMemoryDarwin() (int64, error) {
+	out, err := exec.Command("sysctl", "-n", "hw.memsize").Output()
+	if err != nil {
+		return 0, fmt.Errorf("sysctl hw.memsize: %w", err)
+	}
+	bytes, err := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parsing hw.memsize: %w", err)
+	}
+	return bytes / (1024 * 1024), nil
+}
+
+// DefaultContainerMemory returns suggested --memory and --shm-size strings
+// based on total system RAM using M = max(1, min(floor(0.2*HostRAM_GB), 8)).
+// SHM is set to 50% of the memory value.
+func DefaultContainerMemory(totalMB int64) (memory, shmSize string) {
+	totalGB := totalMB / 1024
+	memGB := int64(float64(totalGB) * 0.2)
+	if memGB < 1 {
+		memGB = 1
+	}
+	if memGB > 8 {
+		memGB = 8
+	}
+	shmMB := memGB * 1024 / 2
+	return fmt.Sprintf("%dg", memGB), fmt.Sprintf("%dm", shmMB)
+}
+
 // MemoryWarning returns a warning string if availMB < 512, otherwise "".
 func MemoryWarning(availMB int64) string {
 	if availMB < memWarnThresholdMB {

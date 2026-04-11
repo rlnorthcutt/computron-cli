@@ -98,8 +98,17 @@ func runUninstall(_ *cobra.Command, _ []string) error {
 			}
 			fmt.Printf("Removing %s... ", dir)
 			if err := os.RemoveAll(dir); err != nil {
-				fmt.Println(styles.CrossMark)
-				fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+				if os.IsPermission(err) {
+					fmt.Println(styles.CrossMark)
+					fmt.Fprintf(os.Stderr, "  Permission denied — some files are owned by the container user.\n")
+					fmt.Fprintf(os.Stderr, "  Remove manually: sudo rm -rf %s\n", dir)
+				} else if os.IsNotExist(err) {
+					// Already deleted (e.g. StateDir is inside SharedDir which was just removed).
+					fmt.Println(styles.Warning.Render("(already removed)"))
+				} else {
+					fmt.Println(styles.CrossMark)
+					fmt.Fprintf(os.Stderr, "  Warning: %v\n", err)
+				}
 			} else {
 				fmt.Println(styles.CheckMark)
 			}

@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/user"
 	"strings"
 
 	"github.com/rlnorthcutt/computron-cli/cmd/debug"
@@ -126,13 +127,13 @@ func (e *DockerEngine) TailLogs(name string, follow bool, tail int) error {
 
 // buildRunArgs constructs the arguments for `docker run` from RunOptions.
 func buildRunArgs(binary string, opts RunOptions) []string {
-	network := opts.Network
-	if network == "" {
-		network = "host"
-	}
 	restart := opts.Restart
 	if restart == "" {
 		restart = "always"
+	}
+	hostPort := opts.WebUIPort
+	if hostPort == "" {
+		hostPort = "8080"
 	}
 
 	args := []string{
@@ -140,7 +141,30 @@ func buildRunArgs(binary string, opts RunOptions) []string {
 		"--name", opts.Name,
 		"--restart", restart,
 		"--shm-size=" + opts.ShmSize,
-		"--network", network,
+	}
+	if opts.Memory != "" {
+		args = append(args, "--memory="+opts.Memory)
+	}
+
+	// Map host port → container port 8080. This supports multi-instance (each
+	// instance gets its own host port) and works regardless of whether the
+	// container app reads the PORT env var.
+	args = append(args, "-p", hostPort+":8080")
+
+	// On Linux, add host-gateway so the container can reach host services
+	// (e.g. Ollama at 127.0.0.1:11434) without --network host.
+	if opts.Platform == "linux" {
+		args = append(args, "--add-host=host-gateway:host-gateway")
+	}
+
+	// Run as the current host user on Linux so files written into volumes are
+	// owned by the host user, preventing permission errors during uninstall.
+	// Skipped on macOS — Docker Desktop's volume sharing handles ownership
+	// differently and the UID space doesn't map the same way.
+	if opts.Platform == "linux" {
+		if u, err := user.Current(); err == nil {
+			args = append(args, "--user", u.Uid+":"+u.Gid)
+		}
 	}
 
 	// Volume mount — append :Z on Linux for SELinux.
@@ -152,23 +176,22 @@ func buildRunArgs(binary string, opts RunOptions) []string {
 	}
 	args = append(args, "-v", sharedMount, "-v", stateMount)
 
-	// macOS: add OLLAMA_HOST env var.
-	if opts.Platform == "darwin" {
-		ollamaHost := opts.OllamaHost
-		if ollamaHost == "" {
-			ollamaHost = "http://host.docker.internal:11434"
-		} else if !strings.HasPrefix(ollamaHost, "http") {
-			ollamaHost = "http://" + ollamaHost
+	// OLLAMA_HOST — always set so the container can find Ollama on the host.
+	ollamaHost := opts.OllamaHost
+	if ollamaHost == "" {
+		if opts.Platform == "darwin" {
+			ollamaHost = "host.docker.internal:11434"
+		} else {
+			ollamaHost = "host-gateway:11434"
 		}
-		args = append(args, "-e", "OLLAMA_HOST="+ollamaHost)
 	}
+	if !strings.HasPrefix(ollamaHost, "http") {
+		ollamaHost = "http://" + ollamaHost
+	}
+	args = append(args, "-e", "OLLAMA_HOST="+ollamaHost)
 
-	// Always set PORT so the container binds to the configured web UI port.
-	port := opts.WebUIPort
-	if port == "" {
-		port = "8080"
-	}
-	args = append(args, "-e", "PORT="+port)
+	// PORT tells the container app which internal port to bind on.
+	args = append(args, "-e", "PORT=8080")
 
 	args = append(args, opts.Image)
 	return args

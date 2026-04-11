@@ -14,6 +14,8 @@ import (
 )
 
 
+var installImageFlag string
+
 var installCmd = &cobra.Command{
 	Use:   "install",
 	Short: "Install Computron via interactive TUI wizard",
@@ -23,6 +25,7 @@ var installCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(installCmd)
+	installCmd.Flags().StringVar(&installImageFlag, "image", "", "override container image (for testing alternate images)")
 }
 
 func runInstall(_ *cobra.Command, _ []string) error {
@@ -45,13 +48,13 @@ func runInstall(_ *cobra.Command, _ []string) error {
 		fmt.Println()
 		// Fall through to fresh wizard, pre-seeded with non-conflicting defaults.
 		suggested := suggestNewInstanceDefaults()
-		model := tui.NewInstallModel(ConfigPath, suggested)
+		model := tui.NewInstallModel(ConfigPath, suggested, installImageFlag)
 		p := tea.NewProgram(model, tea.WithAltScreen())
 		_, err := p.Run()
 		return err
 	}
 
-	model := tui.NewInstallModel(ConfigPath, nil)
+	model := tui.NewInstallModel(ConfigPath, nil, installImageFlag)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	_, err := p.Run()
 	return err
@@ -87,12 +90,11 @@ func suggestNewInstanceDefaults() *config.Config {
 
 	home, _ := os.UserHomeDir()
 	sharedDir := filepath.Join(home, dirBase)
-	stateDir := filepath.Join(home, dirBase, "state")
 
 	d := config.DefaultConfig()
 	d.ContainerName = name
 	d.SharedDir = sharedDir
-	d.StateDir = stateDir
+	d.StateDir = filepath.Join(sharedDir, ".state")
 	d.WebUIPort = strconv.Itoa(maxPort + 1)
 	return d
 }

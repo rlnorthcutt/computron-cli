@@ -124,6 +124,53 @@ func TestOllamaHostCurrentPlatform(t *testing.T) {
 	}
 }
 
+// TestTotalMemoryLinuxMocked tests TotalMemoryMB on Linux using a mock.
+func TestTotalMemoryLinuxMocked(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux-only test")
+	}
+
+	orig := readProcMeminfo
+	readProcMeminfo = func() (string, error) {
+		return sampleMemInfo, nil
+	}
+	defer func() { readProcMeminfo = orig }()
+
+	mb, err := TotalMemoryMB()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// 16310292 kB / 1024 = 15928 MB
+	if mb != 15928 {
+		t.Errorf("expected 15928 MB, got %d", mb)
+	}
+}
+
+// TestDefaultContainerMemory verifies the formula M = max(1, min(floor(0.2*RAM_GB), 8)).
+func TestDefaultContainerMemory(t *testing.T) {
+	cases := []struct {
+		totalMB  int64
+		wantMem  string
+		wantShm  string
+	}{
+		{512, "1g", "512m"},    // 0.5 GB → floor(0.1) = 0, clamped to 1
+		{4096, "1g", "512m"},   // 4 GB → floor(0.8) = 0, clamped to 1
+		{8192, "1g", "512m"},   // 8 GB → floor(1.6) = 1
+		{16384, "3g", "1536m"}, // 16 GB → floor(3.2) = 3
+		{32768, "6g", "3072m"}, // 32 GB → floor(6.4) = 6
+		{65536, "8g", "4096m"}, // 64 GB → floor(12.8) = 12, clamped to 8
+	}
+	for _, c := range cases {
+		mem, shm := DefaultContainerMemory(c.totalMB)
+		if mem != c.wantMem {
+			t.Errorf("totalMB=%d: memory got %q, want %q", c.totalMB, mem, c.wantMem)
+		}
+		if shm != c.wantShm {
+			t.Errorf("totalMB=%d: shmSize got %q, want %q", c.totalMB, shm, c.wantShm)
+		}
+	}
+}
+
 // TestAvailableMemoryLinuxMocked tests AvailableMemoryMB on Linux using a mock.
 func TestAvailableMemoryLinuxMocked(t *testing.T) {
 	if runtime.GOOS != "linux" {

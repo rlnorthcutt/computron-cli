@@ -136,13 +136,13 @@ func (e *PodmanEngine) ImageDigest(image string) string {
 
 // buildPodmanRunArgs builds args for `podman run` — uses --replace instead of pre-remove.
 func buildPodmanRunArgs(opts RunOptions) []string {
-	network := opts.Network
-	if network == "" {
-		network = "host"
-	}
 	restart := opts.Restart
 	if restart == "" {
 		restart = "always"
+	}
+	hostPort := opts.WebUIPort
+	if hostPort == "" {
+		hostPort = "8080"
 	}
 
 	args := []string{
@@ -151,33 +151,41 @@ func buildPodmanRunArgs(opts RunOptions) []string {
 		"--name", opts.Name,
 		"--restart", restart,
 		"--shm-size=" + opts.ShmSize,
-		"--network", network,
 	}
+	if opts.Memory != "" {
+		args = append(args, "--memory="+opts.Memory)
+	}
+
+	// Map host port → container port 8080 for multi-instance support.
+	args = append(args, "-p", hostPort+":8080")
 
 	sharedMount := opts.SharedDir + ":/home/computron"
 	stateMount := opts.StateDir + ":/var/lib/computron"
 	if opts.Platform == "linux" {
-		sharedMount += ":Z"
-		stateMount += ":Z"
+		// :Z — SELinux relabelling; :U — remap volume ownership to the container's
+		// user namespace so host user can read/delete files after uninstall.
+		sharedMount += ":Z,U"
+		stateMount += ":Z,U"
 	}
 	args = append(args, "-v", sharedMount, "-v", stateMount)
 
-	if opts.Platform == "darwin" {
-		ollamaHost := opts.OllamaHost
-		if ollamaHost == "" {
-			ollamaHost = "http://host.docker.internal:11434"
-		} else if !strings.HasPrefix(ollamaHost, "http") {
-			ollamaHost = "http://" + ollamaHost
+	// OLLAMA_HOST — always set. On Linux, Podman 4+ automatically resolves
+	// host.containers.internal to the host IP without extra flags.
+	ollamaHost := opts.OllamaHost
+	if ollamaHost == "" {
+		if opts.Platform == "darwin" {
+			ollamaHost = "host.docker.internal:11434"
+		} else {
+			ollamaHost = "host.containers.internal:11434"
 		}
-		args = append(args, "-e", "OLLAMA_HOST="+ollamaHost)
 	}
+	if !strings.HasPrefix(ollamaHost, "http") {
+		ollamaHost = "http://" + ollamaHost
+	}
+	args = append(args, "-e", "OLLAMA_HOST="+ollamaHost)
 
-	// Always set PORT so the container binds to the configured web UI port.
-	port := opts.WebUIPort
-	if port == "" {
-		port = "8080"
-	}
-	args = append(args, "-e", "PORT="+port)
+	// PORT tells the container app which internal port to bind on.
+	args = append(args, "-e", "PORT=8080")
 
 	args = append(args, opts.Image)
 	return args

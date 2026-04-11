@@ -5,41 +5,45 @@ import (
 	"testing"
 )
 
-func TestValidShmSize(t *testing.T) {
+func TestValidMemSize(t *testing.T) {
 	valid := []string{"256m", "512M", "1g", "1G", "128k", "128K"}
 	invalid := []string{"256", "256mb", "abc", "", "1.5g"}
 
 	for _, s := range valid {
-		if !validShmSize(s) {
+		if !validMemSize(s) {
 			t.Errorf("expected %q to be valid", s)
 		}
 	}
 	for _, s := range invalid {
-		if validShmSize(s) {
+		if validMemSize(s) {
 			t.Errorf("expected %q to be invalid", s)
 		}
 	}
 }
 
 func TestNewInstallModelDefaults(t *testing.T) {
-	m := NewInstallModel("/tmp/test-config.yaml", nil)
+	m := NewInstallModel("/tmp/test-config.yaml", nil, "")
 	if m.Phase != PhasePreflight {
 		t.Errorf("initial phase should be PhasePreflight, got %d", m.Phase)
 	}
 	if m.inputs[inputContainerName].Value() != "computron" {
 		t.Errorf("default container name should be 'computron'")
 	}
-	if m.inputs[inputShmSize].Value() != "256m" {
-		t.Errorf("default shm size should be '256m'")
+	// Memory and SHM defaults are calculated from system RAM; just verify non-empty.
+	if m.inputs[inputMemory].Value() == "" {
+		t.Error("default memory should be non-empty")
+	}
+	if m.inputs[inputShmSize].Value() == "" {
+		t.Error("default shm size should be non-empty")
 	}
 }
 
 func TestBuildConfig(t *testing.T) {
-	m := NewInstallModel("/tmp/test-config.yaml", nil)
+	m := NewInstallModel("/tmp/test-config.yaml", nil, "")
 	// Set custom values.
 	m.inputs[inputContainerName].SetValue("mycontainer")
 	m.inputs[inputSharedDir].SetValue("/data/shared")
-	m.inputs[inputStateDir].SetValue("/data/state")
+	m.inputs[inputMemory].SetValue("4g")
 	m.inputs[inputShmSize].SetValue("512m")
 
 	cfg := m.buildConfig()
@@ -49,13 +53,27 @@ func TestBuildConfig(t *testing.T) {
 	if cfg.SharedDir != "/data/shared" {
 		t.Errorf("SharedDir: got %q", cfg.SharedDir)
 	}
+	if cfg.StateDir != "/data/shared/.state" {
+		t.Errorf("StateDir: got %q, want '/data/shared/.state'", cfg.StateDir)
+	}
+	if cfg.Memory != "4g" {
+		t.Errorf("Memory: got %q", cfg.Memory)
+	}
 	if cfg.ShmSize != "512m" {
 		t.Errorf("ShmSize: got %q", cfg.ShmSize)
 	}
 }
 
+func TestBuildConfigImageOverride(t *testing.T) {
+	m := NewInstallModel("/tmp/test-config.yaml", nil, "my-custom-image:latest")
+	cfg := m.buildConfig()
+	if cfg.Image != "my-custom-image:latest" {
+		t.Errorf("Image: got %q, want 'my-custom-image:latest'", cfg.Image)
+	}
+}
+
 func TestValidateInputEmpty(t *testing.T) {
-	m := NewInstallModel("/tmp/test.yaml", nil)
+	m := NewInstallModel("/tmp/test.yaml", nil, "")
 	m.inputs[inputContainerName].SetValue("")
 	if m.validateCurrentInput() {
 		t.Error("empty container name should fail validation")
@@ -66,7 +84,7 @@ func TestValidateInputEmpty(t *testing.T) {
 }
 
 func TestValidateInputShmSizeBad(t *testing.T) {
-	m := NewInstallModel("/tmp/test.yaml", nil)
+	m := NewInstallModel("/tmp/test.yaml", nil, "")
 	m.inputFocus = inputShmSize
 	m.inputs[inputShmSize].SetValue("256mb") // invalid
 	if m.validateCurrentInput() {
@@ -75,7 +93,7 @@ func TestValidateInputShmSizeBad(t *testing.T) {
 }
 
 func TestValidateInputShmSizeGood(t *testing.T) {
-	m := NewInstallModel("/tmp/test.yaml", nil)
+	m := NewInstallModel("/tmp/test.yaml", nil, "")
 	m.inputFocus = inputShmSize
 	m.inputs[inputShmSize].SetValue("256m")
 	if !m.validateCurrentInput() {
@@ -83,8 +101,26 @@ func TestValidateInputShmSizeGood(t *testing.T) {
 	}
 }
 
+func TestValidateInputMemoryBad(t *testing.T) {
+	m := NewInstallModel("/tmp/test.yaml", nil, "")
+	m.inputFocus = inputMemory
+	m.inputs[inputMemory].SetValue("2gb") // invalid
+	if m.validateCurrentInput() {
+		t.Error("'2gb' should fail memory validation")
+	}
+}
+
+func TestValidateInputMemoryGood(t *testing.T) {
+	m := NewInstallModel("/tmp/test.yaml", nil, "")
+	m.inputFocus = inputMemory
+	m.inputs[inputMemory].SetValue("4g")
+	if !m.validateCurrentInput() {
+		t.Error("'4g' should pass memory validation")
+	}
+}
+
 func TestPreflightAdvancement(t *testing.T) {
-	m := NewInstallModel("/tmp/test.yaml", nil)
+	m := NewInstallModel("/tmp/test.yaml", nil, "")
 	// Simulate all checks arriving.
 	m.preflightDone = 3 // one before 4
 	cmd := m.maybeAdvancePreflight()
@@ -99,21 +135,20 @@ func TestPreflightAdvancement(t *testing.T) {
 }
 
 func TestUpdatePreflightEngineOK(t *testing.T) {
-	m := NewInstallModel("/tmp/test.yaml", nil)
-	// Simulate successful engine check (nil err means permission check fires).
-	// We can't test the full async flow, but we can test the state update.
+	m := NewInstallModel("/tmp/test.yaml", nil, "")
+	// When eng == nil, both the engine check and the skipped permission check
+	// are counted immediately, so preflightDone goes from 0 to 2.
 	msg := engineCheckResult{eng: nil, err: nil}
 	m.preflightDone = 0
-	// eng == nil, so no permission check is fired, preflightDone increments.
 	newModel, _ := m.updatePreflight(msg)
 	nm := newModel.(InstallModel)
-	if nm.preflightDone != 1 {
-		t.Errorf("preflightDone should be 1, got %d", nm.preflightDone)
+	if nm.preflightDone != 2 {
+		t.Errorf("preflightDone should be 2, got %d", nm.preflightDone)
 	}
 }
 
 func TestUpdatePreflightEngineError(t *testing.T) {
-	m := NewInstallModel("/tmp/test.yaml", nil)
+	m := NewInstallModel("/tmp/test.yaml", nil, "")
 	m.preflightDone = 4 // all other checks done
 	msg := engineCheckResult{eng: nil, err: fmt.Errorf("no engine")}
 	newModel, _ := m.updatePreflight(msg)

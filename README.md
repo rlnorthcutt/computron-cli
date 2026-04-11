@@ -16,12 +16,24 @@ CLI for installing, managing, and monitoring [Computron](https://github.com/lefo
 ## Features
 
 - **Guided install wizard** — preflight checks, config form, confirm panel, spinner-driven install steps
+- **Smart memory defaults** — suggests container RAM limits based on your system (20% of host RAM, 1–8 GB)
 - **Update in place** — pulls the latest image and recreates the container, preserving config
 - **Multi-instance** — run more than one Computron container on different ports from a single binary
-- **Health check** — `doctor` runs 10 parallel checks and prints a full pass/warn/fail report
-- **Docker + Podman** — auto-detected; SELinux and host-networking differences handled per OS
+- **Health check** — `doctor` runs parallel checks and prints a full pass/warn/fail report
+- **Docker + Podman** — auto-detected; SELinux, volume ownership, and Ollama host differences handled per OS
 - **Backup on uninstall** — optionally archives data directories to a `.tar.gz` before removal
 - **`--no-color`** — safe to pipe; exits non-zero on actual failures, not on warnings
+
+---
+
+## Requirements
+
+| Engine | Minimum version | Notes |
+|--------|----------------|-------|
+| Docker | 20.10+ | Required for `host-gateway` host alias (Ollama connectivity) |
+| Podman | 4.0+ | Required for `host.containers.internal` and `:U` volume remapping |
+
+Ollama is optional at install time — the wizard warns if it isn't reachable but proceeds anyway.
 
 ---
 
@@ -65,7 +77,7 @@ computron doctor
 #    http://localhost:8080
 ```
 
-That's it. The wizard detects your container engine, checks Ollama reachability, walks you through the config, and starts the container.
+The wizard detects your container engine, checks Ollama reachability, suggests memory limits sized for your machine, and starts the container.
 
 ---
 
@@ -86,7 +98,7 @@ computron <command> [flags]
 | `restart` | Stop then start |
 | `status` | Print a status table (container, dirs, Ollama, web UI port) |
 | `logs` | Tail container logs |
-| `doctor` | Run 10 parallel health checks and print a report |
+| `doctor` | Run parallel health checks and print a report |
 | `config show` | Pretty-print the saved config |
 | `config set <key> <value>` | Update a single config key |
 | `config path` | Print the config file path |
@@ -96,9 +108,16 @@ computron <command> [flags]
 
 ```
 --config string   Config file path (default: ~/.config/computron-cli/config.yaml)
+--name string     Instance name (e.g. computron, computron2)
 --no-color        Disable color output
 --debug           Print raw engine commands and stderr
 --version         Print version and exit
+```
+
+### Install flags
+
+```
+--image string    Override the container image (for testing alternate builds)
 ```
 
 ### Examples
@@ -107,23 +126,28 @@ computron <command> [flags]
 # Tail logs and follow
 computron logs --follow --tail 100
 
-# Run on a non-default port (set during install or via config)
-computron config set web_ui_port 8081
+# Manage a specific instance by name
+computron --name computron2 status
+computron --name computron2 stop
 
-# Check status and exit 1 if not running (useful in scripts)
-computron status
+# Test an alternate image without changing the default
+computron install --image ghcr.io/example/computron:dev
 
-# Uninstall without interactive prompts
-computron uninstall
+# Uninstall a specific instance
+computron --name computron2 uninstall
 ```
 
 ### Multiple instances
 
 If Computron is already installed, `computron install` asks whether to update the existing instance or install a new one. New instances get a unique container name (`computron2`, `computron3`, …), separate data directories, and an incremented port.
 
-Commands that need an instance (e.g. `start`, `status`) show a picker when more than one instance exists.
+Commands that need an instance (e.g. `start`, `status`) show a picker when more than one instance exists, or accept `--name` to skip the prompt.
 
-### Config file
+---
+
+## Configuration
+
+Config files live at:
 
 ```
 ~/.config/computron-cli/instances/<container-name>.yaml
@@ -132,13 +156,18 @@ Commands that need an instance (e.g. `start`, `status`) show a picker when more 
 ```yaml
 container_name: computron
 shared_dir: /home/user/Computron
-state_dir: /home/user/Computron/state
-shm_size: 256m
+state_dir: /home/user/Computron/.state
+memory: 3g
+shm_size: 1536m
 web_ui_port: "8080"
 engine: docker
 image: ghcr.io/lefoulkrod/computron_9000:container-distro-latest
 installed_at: 2025-01-15T10:30:00Z
 ```
+
+**`shared_dir`** is mounted into the container and visible to you as `~/Computron`.  
+**`state_dir`** is a hidden subdirectory (`Computron/.state`) used for persistent container state — you won't normally interact with it.  
+**`memory`** and **`shm_size`** are set by the wizard based on your system RAM and can be adjusted here or during install.
 
 ---
 
@@ -149,9 +178,17 @@ installed_at: 2025-01-15T10:30:00Z
 3. `go vet ./...` — no vet errors
 4. Open a PR against `main`
 
-No Docker SDK — engine calls shell out intentionally to keep the binary dependency-free. Keep that constraint when adding engine features.
+**Engine calls shell out intentionally** — no Docker SDK. Keep the binary dependency-free when adding engine features.
 
-Platform rule: never add a Linux-only flag without a `runtime.GOOS` guard. The `:Z` SELinux volume flag and the Ollama host differ between Linux and macOS — see `CLAUDE.md` for the full platform table.
+**Platform rules:** never add a Linux-only flag without a `runtime.GOOS` guard. Key differences between Linux and macOS:
+
+| Concern | Linux | macOS |
+|---------|-------|-------|
+| Volume SELinux flag | `:Z` (Docker), `:Z,U` (Podman) | Omit |
+| Volume ownership | `--user UID:GID` (Docker), `:U` (Podman) | Omit |
+| Ollama host | `host-gateway` (Docker), `host.containers.internal` (Podman) | `host.docker.internal` |
+
+See `CLAUDE.md` for the full platform table and architecture notes.
 
 ---
 
