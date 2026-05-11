@@ -6,6 +6,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var updateImageFlag string
+
 var updateCmd = &cobra.Command{
 	Use:   "update",
 	Short: "Pull the latest image and recreate the container",
@@ -14,6 +16,7 @@ var updateCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(updateCmd)
+	updateCmd.Flags().StringVar(&updateImageFlag, "image", "", "override container image")
 }
 
 func runUpdate(_ *cobra.Command, _ []string) error {
@@ -26,7 +29,7 @@ func runUpdate(_ *cobra.Command, _ []string) error {
 		return err
 	}
 
-	model := tui.NewUpdateModel(cfg, eng)
+	model := tui.NewUpdateModel(cfg, eng, updateImageFlag)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 	_, err = p.Run()
 	return err

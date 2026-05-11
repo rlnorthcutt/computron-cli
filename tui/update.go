@@ -27,8 +27,14 @@ var updateStepLabels = []string{
 	"Run container",
 }
 
-// NewUpdateModel creates the update TUI model.
-func NewUpdateModel(cfg *config.Config, eng engine.Engine) UpdateModel {
+// NewUpdateModel creates the update TUI model. imageOverride, if non-empty,
+// replaces cfg.Image for the pull and run steps.
+func NewUpdateModel(cfg *config.Config, eng engine.Engine, imageOverride string) UpdateModel {
+	if imageOverride != "" {
+		cfgCopy := *cfg
+		cfgCopy.Image = imageOverride
+		cfg = &cfgCopy
+	}
 	sm := NewSpinnerModel(updateStepLabels, DefaultFlavorMessages)
 	return UpdateModel{
 		BaseModel:    BaseModel{Phase: PhaseInstall},

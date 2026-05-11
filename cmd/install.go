@@ -39,7 +39,7 @@ func runInstall(_ *cobra.Command, _ []string) error {
 			if err != nil {
 				return err
 			}
-			model := tui.NewUpdateModel(LoadedConfig, eng)
+			model := tui.NewUpdateModel(LoadedConfig, eng, installImageFlag)
 			p := tea.NewProgram(model, tea.WithAltScreen())
 			_, err = p.Run()
 			return err

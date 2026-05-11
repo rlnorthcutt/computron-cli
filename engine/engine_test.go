@@ -79,7 +79,7 @@ func TestBuildRunArgsLinux(t *testing.T) {
 	assertContains(t, args, "--add-host=host-gateway:host-gateway")
 	assertContains(t, args, "/home/user/Computron:/home/computron:Z")
 	assertContains(t, args, "/home/user/Computron/.state:/var/lib/computron:Z")
-	assertContainsPrefix(t, args, "OLLAMA_HOST=http://host-gateway:11434")
+	assertNotContainsPrefix(t, args, "LLM_HOST=")
 	assertContains(t, args, "PORT=8080")
 	assertNotContains(t, args, "--network")
 	// --user should be present on Linux (value depends on test runner UID).
@@ -105,7 +105,7 @@ func TestBuildRunArgsLinuxSecondInstance(t *testing.T) {
 	assertContains(t, args, "PORT=8080")
 }
 
-// TestBuildRunArgsMacOS verifies macOS-specific behaviour (no :Z, no host-gateway, OLLAMA_HOST via docker.internal).
+// TestBuildRunArgsMacOS verifies macOS-specific behaviour (no :Z, no host-gateway, LLM_HOST via docker.internal).
 func TestBuildRunArgsMacOS(t *testing.T) {
 	opts := RunOptions{
 		Name:      "computron",
@@ -122,13 +122,13 @@ func TestBuildRunArgsMacOS(t *testing.T) {
 	assertContains(t, args, "8080:8080")
 	assertNotContains(t, args, "/Users/user/Computron:/home/computron:Z")
 	assertContains(t, args, "/Users/user/Computron:/home/computron")
-	assertContainsPrefix(t, args, "OLLAMA_HOST=http://host.docker.internal:11434")
+	assertContainsPrefix(t, args, "LLM_HOST=http://host.docker.internal:11434")
 	assertNotContains(t, args, "--add-host=host-gateway:host-gateway")
 	// --user must be absent on macOS — Docker Desktop handles ownership differently.
 	assertNotContains(t, args, "--user")
 }
 
-// TestBuildPodmanRunArgsHasReplace verifies --replace is present and Linux uses host.containers.internal.
+// TestBuildPodmanRunArgsHasReplace verifies --replace is present and Linux omits LLM_HOST.
 func TestBuildPodmanRunArgsHasReplace(t *testing.T) {
 	opts := RunOptions{
 		Name:      "computron",
@@ -143,7 +143,7 @@ func TestBuildPodmanRunArgsHasReplace(t *testing.T) {
 	args := buildPodmanRunArgs(opts)
 	assertContains(t, args, "--replace")
 	assertContains(t, args, "8080:8080")
-	assertContainsPrefix(t, args, "OLLAMA_HOST=http://host.containers.internal:11434")
+	assertNotContainsPrefix(t, args, "LLM_HOST=")
 	assertNotContains(t, args, "--network")
 	assertContains(t, args, "/home/user/Computron:/home/computron:Z,U")
 	assertContains(t, args, "/home/user/Computron/.state:/var/lib/computron:Z,U")
@@ -164,7 +164,7 @@ func TestBuildPodmanRunArgsMacOS(t *testing.T) {
 	args := buildPodmanRunArgs(opts)
 	assertContains(t, args, "--replace")
 	assertContains(t, args, "8080:8080")
-	assertContainsPrefix(t, args, "OLLAMA_HOST=http://host.docker.internal:11434")
+	assertContainsPrefix(t, args, "LLM_HOST=http://host.docker.internal:11434")
 	// No SELinux or user-namespace flags on macOS.
 	assertNotContains(t, args, "/Users/user/Computron:/home/computron:Z,U")
 	assertNotContains(t, args, "/Users/user/Computron:/home/computron:Z")
@@ -263,5 +263,15 @@ func assertContainsPrefix(t *testing.T, slice []string, prefix string) {
 		}
 	}
 	t.Errorf("args %v: expected an element with prefix %q", slice, prefix)
+}
+
+func assertNotContainsPrefix(t *testing.T, slice []string, prefix string) {
+	t.Helper()
+	for _, s := range slice {
+		if len(s) >= len(prefix) && s[:len(prefix)] == prefix {
+			t.Errorf("args %v: unexpected element with prefix %q", slice, prefix)
+			return
+		}
+	}
 }
 

@@ -48,7 +48,16 @@ func (e *PodmanEngine) PullImage(image string, msgs chan<- string) error {
 			msgs <- scanner.Text()
 		}
 	}
-	return cmd.Wait()
+	if err := cmd.Wait(); err != nil {
+		// Pull failed — if the image already exists locally (e.g. a local build
+		// tagged as localhost/foo:latest), treat that as success.
+		check := exec.Command("podman", "image", "exists", image)
+		if check.Run() == nil {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func (e *PodmanEngine) RunContainer(opts RunOptions) error {
@@ -169,20 +178,19 @@ func buildPodmanRunArgs(opts RunOptions) []string {
 	}
 	args = append(args, "-v", sharedMount, "-v", stateMount)
 
-	// OLLAMA_HOST — always set. On Linux, Podman 4+ automatically resolves
-	// host.containers.internal to the host IP without extra flags.
-	ollamaHost := opts.OllamaHost
-	if ollamaHost == "" {
-		if opts.Platform == "darwin" {
+	// LLM_HOST — set on non-Linux so the container can reach Ollama on the host.
+	// On Linux with --network=host, the container shares the host network and
+	// can reach 127.0.0.1:11434 directly, so no extra env var is needed.
+	if opts.Platform != "linux" {
+		ollamaHost := opts.OllamaHost
+		if ollamaHost == "" {
 			ollamaHost = "host.docker.internal:11434"
-		} else {
-			ollamaHost = "host.containers.internal:11434"
 		}
+		if !strings.HasPrefix(ollamaHost, "http") {
+			ollamaHost = "http://" + ollamaHost
+		}
+		args = append(args, "-e", "LLM_HOST="+ollamaHost)
 	}
-	if !strings.HasPrefix(ollamaHost, "http") {
-		ollamaHost = "http://" + ollamaHost
-	}
-	args = append(args, "-e", "OLLAMA_HOST="+ollamaHost)
 
 	// PORT tells the container app which internal port to bind on.
 	args = append(args, "-e", "PORT=8080")
