@@ -6,7 +6,6 @@ import (
 	"sync"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/rlnorthcutt/computron-cli/checks"
 	"github.com/rlnorthcutt/computron-cli/engine"
 	"github.com/rlnorthcutt/computron-cli/styles"
 	"github.com/spf13/cobra"
@@ -47,25 +46,19 @@ func runStatus(_ *cobra.Command, _ []string) error {
 	type result struct {
 		containerStatus string
 		containerErr    error
-		ollamaOK        bool
-		ollamaHost      string
 		sharedExists    bool
 		stateExists     bool
 	}
 
 	var res result
 	var wg sync.WaitGroup
-	wg.Add(3)
+	wg.Add(2)
 
 	go func() {
 		defer wg.Done()
 		s, err := eng.ContainerStatus(cfg.ContainerName)
 		res.containerStatus = s
 		res.containerErr = err
-	}()
-	go func() {
-		defer wg.Done()
-		res.ollamaOK, res.ollamaHost = checks.CheckOllama()
 	}()
 	go func() {
 		defer wg.Done()
@@ -89,11 +82,6 @@ func runStatus(_ *cobra.Command, _ []string) error {
 		running = true
 	}
 
-	ollamaStatus := styles.Error.Render("✗ not reachable")
-	if res.ollamaOK {
-		ollamaStatus = styles.Success.Render("✓ reachable at " + res.ollamaHost)
-	}
-
 	sharedStatus := styles.Error.Render("✗ missing")
 	if res.sharedExists {
 		sharedStatus = styles.Success.Render("✓ exists")
@@ -111,7 +99,6 @@ func runStatus(_ *cobra.Command, _ []string) error {
 	fmt.Printf("  %s %s\n", label.Render("Engine"), value.Render(cfg.Engine))
 	fmt.Printf("  %s %s  %s\n", label.Render("Shared dir"), value.Render(cfg.SharedDir), sharedStatus)
 	fmt.Printf("  %s %s  %s\n", label.Render("State dir"), value.Render(cfg.StateDir), stateStatus)
-	fmt.Printf("  %s %s\n", label.Render("Ollama"), ollamaStatus)
 	fmt.Printf("  %s %s\n", label.Render("Web UI"), value.Render("http://localhost:"+cfg.WebUIPortOrDefault()))
 	fmt.Println()
 

@@ -28,11 +28,6 @@ type engineCheckResult struct {
 
 type permissionCheckResult struct{ err error }
 
-type ollamaCheckResult struct {
-	reachable bool
-	host      string
-}
-
 type memoryCheckResult struct {
 	mb      int64
 	warning string
@@ -50,8 +45,6 @@ type InstallModel struct {
 	eng          engine.Engine
 	engErr       error
 	permErr      error
-	ollamaOK     bool
-	ollamaHost   string
 	memMB        int64
 	memWarning   string
 	preflightDone int // count of completed checks
@@ -164,7 +157,6 @@ func (m InstallModel) Init() tea.Cmd {
 	return tea.Batch(
 		m.preflightSpinner.Tick,
 		runEngineCheck,
-		runOllamaCheck,
 		runMemoryCheck,
 	)
 }
@@ -216,12 +208,6 @@ func (m InstallModel) updatePreflight(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.permErr = msg.err
 		return m, m.maybeAdvancePreflight()
 
-	case ollamaCheckResult:
-		m.preflightDone++
-		m.ollamaOK = msg.reachable
-		m.ollamaHost = msg.host
-		return m, m.maybeAdvancePreflight()
-
 	case memoryCheckResult:
 		m.preflightDone++
 		m.memMB = msg.mb
@@ -246,11 +232,11 @@ func (m InstallModel) updatePreflight(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // maybeAdvancePreflight returns a Cmd that fires allPreflightDone once all
-// 4 checks (engine, permission counted together, ollama, memory) are done.
-// Engine check fires permission check as a follow-up, so we wait for 4 total.
+// 3 checks (engine + permission counted together, memory) are done.
+// Engine check fires permission check as a follow-up, so we wait for 3 total.
 func (m *InstallModel) maybeAdvancePreflight() tea.Cmd {
-	// We expect: engine(1) + permission(1) + ollama(1) + memory(1) = 4
-	if m.preflightDone >= 4 {
+	// We expect: engine(1) + permission(1) + memory(1) = 3
+	if m.preflightDone >= 3 {
 		return func() tea.Msg { return allPreflightDone{} }
 	}
 	return nil
@@ -360,10 +346,6 @@ func validPort(s string) bool {
 
 func (m *InstallModel) buildConfirmWarnings() {
 	m.confirmWarnings = nil
-	if !m.ollamaOK {
-		m.confirmWarnings = append(m.confirmWarnings,
-			fmt.Sprintf("⚠  Ollama not found at %s\n   Install: https://ollama.com\n   You can install Computron now and start Ollama later.", m.ollamaHost))
-	}
 	if m.memWarning != "" {
 		m.confirmWarnings = append(m.confirmWarnings, "⚠  "+m.memWarning)
 	}
@@ -579,13 +561,6 @@ func (m InstallModel) viewPreflight() string {
 		rows = append(rows, row{"Engine permissions", "", false, false, false})
 	}
 
-	ollamaDone := m.ollamaHost != ""
-	ollamaDetail := "not found — install later from https://ollama.com"
-	if m.ollamaOK {
-		ollamaDetail = "reachable at " + m.ollamaHost
-	}
-	rows = append(rows, row{"Ollama  :11434", ollamaDetail, m.ollamaOK, ollamaDone, !m.ollamaOK && ollamaDone})
-
 	memDone := m.memMB > 0
 	memDetail := "checking..."
 	if memDone {
@@ -699,7 +674,6 @@ func (m InstallModel) viewDone() string {
 		return "  " + styles.Dim.Render(padRight(k, 14)) + styles.Active.Render(v) + "\n"
 	}
 	out += kv("Web UI", "http://localhost:"+m.inputs[inputWebUIPort].Value())
-	out += kv("Ollama", checks.OllamaHost())
 	out += kv("Shared dir", m.inputs[inputSharedDir].Value())
 	out += kv("Config", m.configPath)
 	out += "\n" + styles.Dim.Render("  Press any key to exit.")
@@ -734,11 +708,6 @@ func runPermissionCheck(eng engine.Engine) tea.Cmd {
 		}
 		return permissionCheckResult{}
 	}
-}
-
-func runOllamaCheck() tea.Msg {
-	ok, host := checks.CheckOllama()
-	return ollamaCheckResult{reachable: ok, host: host}
 }
 
 func runMemoryCheck() tea.Msg {

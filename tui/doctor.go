@@ -33,7 +33,7 @@ type CheckResult struct {
 
 // RunDoctorChecks runs all health checks concurrently and returns results.
 func RunDoctorChecks(cfg *config.Config, eng engine.Engine) []CheckResult {
-	results := make([]CheckResult, 10)
+	results := make([]CheckResult, 9)
 	var wg sync.WaitGroup
 
 	runCheck := func(i int, fn func() CheckResult) {
@@ -92,18 +92,8 @@ func RunDoctorChecks(cfg *config.Config, eng engine.Engine) []CheckResult {
 		return CheckResult{"Image", CheckPass, digest[:min(40, len(digest))] + "...", ""}
 	})
 
-	// 4: Ollama reachable
+	// 4: Web UI port (Computron web UI)
 	runCheck(4, func() CheckResult {
-		ok, host := checks.CheckOllama()
-		if !ok {
-			return CheckResult{"Ollama", CheckWarn, "not reachable at " + host,
-				"Install: https://ollama.com"}
-		}
-		return CheckResult{"Ollama", CheckPass, "reachable at " + host, ""}
-	})
-
-	// 5: Web UI port (Computron web UI)
-	runCheck(5, func() CheckResult {
 		port := "8080"
 		if cfg != nil {
 			port = cfg.WebUIPortOrDefault()
@@ -117,24 +107,24 @@ func RunDoctorChecks(cfg *config.Config, eng engine.Engine) []CheckResult {
 		return CheckResult{"Port " + port + " (Web UI)", CheckPass, "reachable", ""}
 	})
 
-	// 6: Shared dir writable
-	runCheck(6, func() CheckResult {
+	// 5: Shared dir writable
+	runCheck(5, func() CheckResult {
 		if cfg == nil {
 			return CheckResult{"Shared dir", CheckWarn, "no config", ""}
 		}
 		return dirCheck("Shared dir", cfg.SharedDir)
 	})
 
-	// 7: State dir writable
-	runCheck(7, func() CheckResult {
+	// 6: State dir writable
+	runCheck(6, func() CheckResult {
 		if cfg == nil {
 			return CheckResult{"State dir", CheckWarn, "no config", ""}
 		}
 		return dirCheck("State dir", cfg.StateDir)
 	})
 
-	// 8: Memory
-	runCheck(8, func() CheckResult {
+	// 7: Memory
+	runCheck(7, func() CheckResult {
 		mb, err := checks.AvailableMemoryMB()
 		if err != nil {
 			return CheckResult{"Memory", CheckWarn, "could not read", ""}
@@ -147,8 +137,8 @@ func RunDoctorChecks(cfg *config.Config, eng engine.Engine) []CheckResult {
 		return CheckResult{"Memory", CheckPass, fmt.Sprintf("%d MB available", mb), ""}
 	})
 
-	// 9: OS + arch
-	runCheck(9, func() CheckResult {
+	// 8: OS + arch
+	runCheck(8, func() CheckResult {
 		return CheckResult{"OS / Arch", CheckPass,
 			runtime.GOOS + " / " + runtime.GOARCH, ""}
 	})

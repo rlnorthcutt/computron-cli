@@ -122,15 +122,15 @@ func TestValidateInputMemoryGood(t *testing.T) {
 func TestPreflightAdvancement(t *testing.T) {
 	m := NewInstallModel("/tmp/test.yaml", nil, "")
 	// Simulate all checks arriving.
-	m.preflightDone = 3 // one before 4
+	m.preflightDone = 2 // one before 3
 	cmd := m.maybeAdvancePreflight()
 	if cmd != nil {
-		t.Error("should not advance until 4 checks complete")
+		t.Error("should not advance until 3 checks complete")
 	}
-	m.preflightDone = 4
+	m.preflightDone = 3
 	cmd = m.maybeAdvancePreflight()
 	if cmd == nil {
-		t.Error("should advance after 4 checks complete")
+		t.Error("should advance after 3 checks complete")
 	}
 }
 
